@@ -1,20 +1,14 @@
 using System;
-namespace CRMS.Api.Models;
+namespace CRMS.Api.DTOs;
 
-public class Booking
+public class BookingDto
 {
     public int Id { get; set; }
     public int CustomerId { get; set; }
     public int CarId { get; set; }
-
     public DateTime PickupDate { get; set; }
     public DateTime ReturnDate { get; set; }
-
     public decimal TotalAmount { get; set; }
-
-    public string Status { get; set; } = "Pending";
-
-    public int? ApprovedById { get; set; }
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string Status { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
 }

@@ -1,14 +1,13 @@
 using System;
-namespace CRMS.Api.Models;
+namespace CRMS.Api.DTOs;
 
-public class User
+public class UserDto
 {
     public int Id { get; set; }
     public string Username { get; set; } = "";
-    public string PasswordHash { get; set; } = "";
-    public string Role { get; set; } = "Customer";
+    public string Role { get; set; } = "";
     public string FullName { get; set; } = "";
     public string Email { get; set; } = "";
     public string Phone { get; set; } = "";
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
 }

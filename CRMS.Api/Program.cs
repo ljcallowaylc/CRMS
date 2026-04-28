@@ -1,9 +1,15 @@
+using System;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.OpenApi.Models;
 using CRMS.Api.Models;
 using CRMS.Api.Data;
+using CRMS.Api.DTOs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,14 +18,16 @@ var builder = WebApplication.CreateBuilder(args);
 // DATABASE
 // =====================
 //
+var connString = builder.Configuration["ConnectionStrings:DefaultConnection"];
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(connString));
 
 builder.Services.AddEndpointsApiExplorer();
 
 //
 // =====================
-// SWAGGER + BASIC AUTH
+// SWAGGER
 // =====================
 //
 builder.Services.AddSwaggerGen(c =>
@@ -49,7 +57,7 @@ builder.Services.AddSwaggerGen(c =>
                     Id = "basic"
                 }
             },
-            new string[] {}
+            Array.Empty<string>()
         }
     });
 });
@@ -79,7 +87,6 @@ app.Use(async (ctx, next) =>
     if (string.IsNullOrWhiteSpace(header) || !header.StartsWith("Basic "))
     {
         ctx.Response.StatusCode = 401;
-        await ctx.Response.WriteAsync("Missing auth");
         return;
     }
 
@@ -90,7 +97,6 @@ app.Use(async (ctx, next) =>
     if (parts.Length != 2)
     {
         ctx.Response.StatusCode = 401;
-        await ctx.Response.WriteAsync("Invalid auth");
         return;
     }
 
@@ -114,7 +120,6 @@ app.Use(async (ctx, next) =>
     }
 
     ctx.Items["User"] = user;
-
     await next();
 });
 
@@ -131,22 +136,37 @@ bool Role(HttpContext ctx, params string[] roles)
 
 //
 // =====================
-// AUTH
+// REGISTER
 // =====================
 //
-app.MapPost("/auth/register", async (AppDbContext db, User user) =>
+app.MapPost("/auth/register", async (AppDbContext db, RegisterUserDto dto) =>
 {
-    user.PasswordHash = Convert.ToHexString(
-        SHA256.HashData(Encoding.UTF8.GetBytes(user.PasswordHash))
-    );
-
-    user.Role = "Customer";
-    user.CreatedAt = DateTime.UtcNow;
+    var user = new User
+    {
+        Username = dto.Username,
+        FullName = dto.FullName,
+        Email = dto.Email,
+        Phone = dto.Phone,
+        Role = "Customer",
+        CreatedAt = DateTime.UtcNow,
+        PasswordHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(dto.Password))
+        )
+    };
 
     db.Users.Add(user);
     await db.SaveChangesAsync();
 
-    return Results.Ok(user);
+    return Results.Ok(new UserDto
+    {
+        Id = user.Id,
+        Username = user.Username,
+        Role = user.Role,
+        FullName = user.FullName,
+        Email = user.Email,
+        Phone = user.Phone,
+        CreatedAt = user.CreatedAt
+    });
 });
 
 //
@@ -157,7 +177,17 @@ app.MapPost("/auth/register", async (AppDbContext db, User user) =>
 app.MapGet("/users", (HttpContext ctx, AppDbContext db) =>
 {
     if (!Role(ctx, "Admin")) return Results.Forbid();
-    return Results.Ok(db.Users.ToList());
+
+    return Results.Ok(db.Users.Select(u => new UserDto
+    {
+        Id = u.Id,
+        Username = u.Username,
+        Role = u.Role,
+        FullName = u.FullName,
+        Email = u.Email,
+        Phone = u.Phone,
+        CreatedAt = u.CreatedAt
+    }).ToList());
 });
 
 //
@@ -167,39 +197,65 @@ app.MapGet("/users", (HttpContext ctx, AppDbContext db) =>
 //
 app.MapGet("/cars", (AppDbContext db) =>
 {
-    return Results.Ok(db.Cars.ToList());
+    return Results.Ok(db.Cars.Select(c => new CarDto
+    {
+        Id = c.Id,
+        Make = c.Make,
+        Model = c.Model,
+        Year = c.Year,
+        Category = c.Category,
+        DailyRate = c.DailyRate,
+        LicencePlate = c.LicencePlate,
+        Colour = c.Colour,
+        Status = c.Status
+    }).ToList());
 });
 
 app.MapGet("/cars/{id}", (int id, AppDbContext db) =>
 {
     var car = db.Cars.Find(id);
-    return car == null ? Results.NotFound() : Results.Ok(car);
+    if (car == null) return Results.NotFound();
+
+    return Results.Ok(new CarDto
+    {
+        Id = car.Id,
+        Make = car.Make,
+        Model = car.Model,
+        Year = car.Year,
+        Category = car.Category,
+        DailyRate = car.DailyRate,
+        LicencePlate = car.LicencePlate,
+        Colour = car.Colour,
+        Status = car.Status
+    });
 });
 
 app.MapPost("/cars", async (HttpContext ctx, AppDbContext db, Car car) =>
 {
     if (!Role(ctx, "Admin")) return Results.Forbid();
 
+    car.Status = "Available";
     db.Cars.Add(car);
     await db.SaveChangesAsync();
+
     return Results.Ok(car);
 });
 
-app.MapPut("/cars/{id}", async (HttpContext ctx, int id, AppDbContext db, Car updated) =>
+app.MapPut("/cars/{id}", async (HttpContext ctx, int id, AppDbContext db, Car dto) =>
 {
     if (!Role(ctx, "Admin")) return Results.Forbid();
 
     var car = await db.Cars.FindAsync(id);
     if (car == null) return Results.NotFound();
 
-    car.Make = updated.Make;
-    car.Model = updated.Model;
-    car.Year = updated.Year;
-    car.Category = updated.Category;
-    car.DailyRate = updated.DailyRate;
-    car.LicencePlate = updated.LicencePlate;
-    car.Colour = updated.Colour;
-    car.Status = updated.Status;
+    car.Make = dto.Make;
+    car.Model = dto.Model;
+    car.Year = dto.Year;
+    car.Category = dto.Category;
+    car.DailyRate = dto.DailyRate;
+    car.LicencePlate = dto.LicencePlate;
+    car.Colour = dto.Colour;
+    car.Status = dto.Status;
 
     await db.SaveChangesAsync();
     return Results.Ok(car);
@@ -220,127 +276,193 @@ app.MapDelete("/cars/{id}", async (HttpContext ctx, int id, AppDbContext db) =>
 
 //
 // =====================
-// BOOKINGS
+// CREATE BOOKING
 // =====================
 //
-app.MapPost("/bookings", async (HttpContext ctx, AppDbContext db, Booking b) =>
+app.MapPost("/bookings", async (HttpContext ctx, AppDbContext db, CreateBookingDto dto) =>
 {
     var user = ctx.Items["User"] as User;
+    if (user == null) return Results.Unauthorized();
 
-    var car = await db.Cars.FindAsync(b.CarId);
+    var car = await db.Cars.FindAsync(dto.CarId);
     if (car == null) return Results.NotFound();
 
-    bool conflict = db.Bookings.Any(x =>
-        x.CarId == b.CarId &&
+    var conflict = await db.Bookings.AnyAsync(x =>
+        x.CarId == dto.CarId &&
         (x.Status == "Approved" || x.Status == "Active") &&
-        b.PickupDate < x.ReturnDate &&
-        b.ReturnDate > x.PickupDate
+        dto.PickupDate < x.ReturnDate &&
+        dto.ReturnDate > x.PickupDate
     );
 
     if (conflict) return Results.Conflict("Car already booked");
 
-    var days = (b.ReturnDate - b.PickupDate).Days;
+    var days = (decimal)Math.Ceiling(
+        (dto.ReturnDate.Date - dto.PickupDate.Date).TotalDays
+    );
+
     if (days <= 0) return Results.BadRequest("Invalid dates");
 
-    b.CustomerId = user!.Id;
-    b.Status = "Pending";
-    b.TotalAmount = days * car.DailyRate;
-    b.CreatedAt = DateTime.UtcNow;
+    var booking = new Booking
+    {
+        CarId = dto.CarId,
+        CustomerId = user.Id,
+        PickupDate = dto.PickupDate,
+        ReturnDate = dto.ReturnDate,
+        Status = "Pending",
+        TotalAmount = days * car.DailyRate,
+        CreatedAt = DateTime.UtcNow
+    };
 
-    db.Bookings.Add(b);
+    db.Bookings.Add(booking);
     await db.SaveChangesAsync();
 
-    return Results.Ok(b);
+    return Results.Ok(new BookingDto
+    {
+        Id = booking.Id,
+        CarId = booking.CarId,
+        CustomerId = booking.CustomerId,
+        PickupDate = booking.PickupDate,
+        ReturnDate = booking.ReturnDate,
+        TotalAmount = booking.TotalAmount,
+        Status = booking.Status
+    });
 });
 
+//
+// =====================
+// MY BOOKINGS
+// =====================
+//
 app.MapGet("/bookings/my", (HttpContext ctx, AppDbContext db) =>
 {
     var user = ctx.Items["User"] as User;
+    if (user == null) return Results.Unauthorized();
 
     return Results.Ok(db.Bookings
-        .Where(x => x.CustomerId == user!.Id)
-        .ToList());
+        .Where(b => b.CustomerId == user.Id)
+        .Select(b => new BookingDto
+        {
+            Id = b.Id,
+            CarId = b.CarId,
+            CustomerId = b.CustomerId,
+            PickupDate = b.PickupDate,
+            ReturnDate = b.ReturnDate,
+            TotalAmount = b.TotalAmount,
+            Status = b.Status
+        }).ToList());
 });
 
+//
+// =====================
+// ALL BOOKINGS
+// =====================
+//
 app.MapGet("/bookings", (HttpContext ctx, AppDbContext db) =>
 {
     if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
 
-    return Results.Ok(db.Bookings.ToList());
+    return Results.Ok(db.Bookings.Select(b => new BookingDto
+    {
+        Id = b.Id,
+        CarId = b.CarId,
+        CustomerId = b.CustomerId,
+        PickupDate = b.PickupDate,
+        ReturnDate = b.ReturnDate,
+        TotalAmount = b.TotalAmount,
+        Status = b.Status
+    }).ToList());
 });
 
 //
+// =====================
+// CANCEL BOOKING
+// =====================
+//
+app.MapDelete("/bookings/{id}", async (HttpContext ctx, int id, AppDbContext db) =>
+{
+    var user = ctx.Items["User"] as User;
+    if (user == null) return Results.Unauthorized();
+
+    var booking = await db.Bookings.FindAsync(id);
+    if (booking == null) return Results.NotFound();
+
+    if (booking.CustomerId != user.Id) return Results.Forbid();
+
+    if (booking.Status != "Pending")
+        return Results.BadRequest("Only pending bookings can be cancelled");
+
+    booking.Status = "Cancelled";
+    await db.SaveChangesAsync();
+
+    return Results.Ok();
+});
+
+//
+// =====================
 // APPROVE
+// =====================
 //
 app.MapPut("/bookings/{id}/approve", async (HttpContext ctx, int id, AppDbContext db) =>
 {
     if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
 
-    var b = await db.Bookings.FindAsync(id);
-    if (b == null) return Results.NotFound();
+    var booking = await db.Bookings.FindAsync(id);
+    if (booking == null) return Results.NotFound();
 
-    if (b.Status != "Pending") return Results.BadRequest();
+    if (booking.Status != "Pending") return Results.BadRequest();
 
-    b.Status = "Approved";
+    var car = await db.Cars.FindAsync(booking.CarId);
+
+    booking.Status = "Approved";
+    booking.ApprovedById = (ctx.Items["User"] as User)!.Id;
+    if (car != null) car.Status = "Rented";
+
     await db.SaveChangesAsync();
-
-    return Results.Ok(b);
+    return Results.Ok();
 });
 
 //
+// =====================
 // REJECT
+// =====================
 //
 app.MapPut("/bookings/{id}/reject", async (HttpContext ctx, int id, AppDbContext db) =>
 {
     if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
 
-    var b = await db.Bookings.FindAsync(id);
-    if (b == null) return Results.NotFound();
+    var booking = await db.Bookings.FindAsync(id);
+    if (booking == null) return Results.NotFound();
 
-    if (b.Status != "Pending") return Results.BadRequest();
+    if (booking.Status != "Pending") return Results.BadRequest();
 
-    b.Status = "Rejected";
+    booking.Status = "Rejected";
+    booking.ApprovedById = (ctx.Items["User"] as User)!.Id;
+
     await db.SaveChangesAsync();
-
-    return Results.Ok(b);
+    return Results.Ok();
 });
 
 //
+// =====================
 // COMPLETE
+// =====================
 //
 app.MapPut("/bookings/{id}/complete", async (HttpContext ctx, int id, AppDbContext db) =>
 {
     if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
 
-    var b = await db.Bookings.FindAsync(id);
-    if (b == null) return Results.NotFound();
+    var booking = await db.Bookings.FindAsync(id);
+    if (booking == null) return Results.NotFound();
 
-    if (b.Status != "Active") return Results.BadRequest();
+    if (booking.Status != "Active") return Results.BadRequest();
 
-    b.Status = "Completed";
-    await db.SaveChangesAsync();
+    var car = await db.Cars.FindAsync(booking.CarId);
 
-    return Results.Ok(b);
-});
-
-//
-// CANCEL
-//
-app.MapDelete("/bookings/{id}", async (HttpContext ctx, int id, AppDbContext db) =>
-{
-    var user = ctx.Items["User"] as User;
-
-    var b = await db.Bookings.FindAsync(id);
-    if (b == null) return Results.NotFound();
-
-    if (b.CustomerId != user!.Id) return Results.Forbid();
-
-    if (b.Status != "Pending") return Results.BadRequest();
-
-    b.Status = "Cancelled";
+    booking.Status = "Completed";
+    if (car != null) car.Status = "Available";
 
     await db.SaveChangesAsync();
-    return Results.Ok(b);
+    return Results.Ok();
 });
 
 app.Run();
