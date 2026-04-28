@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CRMS.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ee3a88df075fb21d13dba23ba15680cc458e1644")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2a1ca7185b134c1c501b7f2b3feab0dec56a0c21")]
 [assembly: System.Reflection.AssemblyProductAttribute("CRMS.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CRMS.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
