@@ -1,49 +1,42 @@
-using System;
-using System.Linq;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi.Models;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.OpenApi.Models;
-using CRMS.Api.Models;
-using CRMS.Api.Data;
-using CRMS.Api.DTOs;
+using CRMS.API.Auth;
+using CRMS.API.Data;
+using CRMS.API.DTOs;
+using CRMS.API.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-//
-// =====================
-// DATABASE
-// =====================
-//
-var connString = builder.Configuration["ConnectionStrings:DefaultConnection"];
-
+// ── Database ────────────────────────────────────────────────────────────────
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(connString));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+// ── Auth ────────────────────────────────────────────────────────────────────
+builder.Services.AddAuthentication("BasicAuth")
+    .AddScheme<AuthenticationSchemeOptions, BasicAuthHandler>("BasicAuth", null);
+
+builder.Services.AddAuthorization();
+
+// ── Swagger ─────────────────────────────────────────────────────────────────
 builder.Services.AddEndpointsApiExplorer();
-
-//
-// =====================
-// SWAGGER
-// =====================
-//
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
     {
-        Title = "CRMS API",
-        Version = "v1"
+        Title = "Car Rental Management System API",
+        Version = "v1",
+        Description = "CRMS REST API — TECH 4263 Semester Project"
     });
 
-    c.AddSecurityDefinition("basic", new OpenApiSecurityScheme
+    c.AddSecurityDefinition("basicAuth", new OpenApiSecurityScheme
     {
-        Name = "Authorization",
         Type = SecuritySchemeType.Http,
         Scheme = "basic",
-        In = ParameterLocation.Header
+        Description = "Enter username and password"
     });
 
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -51,418 +44,401 @@ builder.Services.AddSwaggerGen(c =>
         {
             new OpenApiSecurityScheme
             {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "basic"
-                }
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "basicAuth" }
             },
             Array.Empty<string>()
         }
     });
 });
 
-var app = builder.Build();
-
-app.UseSwagger();
-app.UseSwaggerUI();
-
-//
-// =====================
-// BASIC AUTH MIDDLEWARE
-// =====================
-//
-app.Use(async (ctx, next) =>
+// ── CORS (allow GUI clients) ─────────────────────────────────────────────────
+builder.Services.AddCors(options =>
 {
-    var path = ctx.Request.Path.Value!.ToLower();
-
-    if (path.Contains("/auth/register") || path.Contains("/swagger"))
-    {
-        await next();
-        return;
-    }
-
-    var header = ctx.Request.Headers["Authorization"].ToString();
-
-    if (string.IsNullOrWhiteSpace(header) || !header.StartsWith("Basic "))
-    {
-        ctx.Response.StatusCode = 401;
-        return;
-    }
-
-    var encoded = header["Basic ".Length..];
-    var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-    var parts = decoded.Split(':');
-
-    if (parts.Length != 2)
-    {
-        ctx.Response.StatusCode = 401;
-        return;
-    }
-
-    var db = ctx.RequestServices.GetRequiredService<AppDbContext>();
-
-    var user = db.Users.FirstOrDefault(u => u.Username == parts[0]);
-    if (user == null)
-    {
-        ctx.Response.StatusCode = 401;
-        return;
-    }
-
-    var hash = Convert.ToHexString(
-        SHA256.HashData(Encoding.UTF8.GetBytes(parts[1]))
-    );
-
-    if (user.PasswordHash != hash)
-    {
-        ctx.Response.StatusCode = 401;
-        return;
-    }
-
-    ctx.Items["User"] = user;
-    await next();
+    options.AddDefaultPolicy(policy =>
+        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
 });
 
-//
-// =====================
-// ROLE CHECK
-// =====================
-//
-bool Role(HttpContext ctx, params string[] roles)
+var app = builder.Build();
+
+// ── Middleware ───────────────────────────────────────────────────────────────
+app.UseCors();
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    var u = ctx.Items["User"] as User;
-    return u != null && roles.Contains(u.Role);
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "CRMS API v1");
+    c.RoutePrefix = "swagger";
+});
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+// ── Auto-migrate on startup ──────────────────────────────────────────────────
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
 }
 
-//
-// =====================
-// REGISTER
-// =====================
-//
-app.MapPost("/auth/register", async (AppDbContext db, RegisterUserDto dto) =>
+// ════════════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+
+static int GetUserId(ClaimsPrincipal user) =>
+    int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+static string GetUserRole(ClaimsPrincipal user) =>
+    user.FindFirstValue(ClaimTypes.Role)!;
+
+static BookingResponse ToBookingResponse(Booking b) => new(
+    b.Id,
+    b.CustomerId,
+    b.Customer?.FullName ?? "",
+    b.CarId,
+    b.Car != null ? $"{b.Car.Make} {b.Car.Model} ({b.Car.Year}) - {b.Car.LicencePlate}" : "",
+    b.PickupDate,
+    b.ReturnDate,
+    b.TotalAmount,
+    b.Status,
+    b.ApprovedById,
+    b.ApprovedBy?.FullName,
+    b.CreatedAt
+);
+
+static CarResponse ToCarResponse(Car c) => new(
+    c.Id, c.Make, c.Model, c.Year, c.Category, c.DailyRate, c.LicencePlate, c.Colour, c.Status);
+
+static UserResponse ToUserResponse(User u) => new(
+    u.Id, u.Username, u.Role, u.FullName, u.Email, u.Phone, u.CreatedAt);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  AUTH ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════
+
+// POST /auth/register — public
+app.MapPost("/auth/register", async (RegisterRequest req, AppDbContext db) =>
 {
+    if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password)
+        || string.IsNullOrWhiteSpace(req.FullName) || string.IsNullOrWhiteSpace(req.Email))
+        return Results.BadRequest(new { error = "Username, Password, FullName, and Email are required." });
+
+    if (await db.Users.AnyAsync(u => u.Username == req.Username))
+        return Results.Conflict(new { error = "Username already taken." });
+
+    var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(req.Password))).ToLower();
+
     var user = new User
     {
-        Username = dto.Username,
-        FullName = dto.FullName,
-        Email = dto.Email,
-        Phone = dto.Phone,
+        Username = req.Username,
+        PasswordHash = hash,
         Role = "Customer",
-        CreatedAt = DateTime.UtcNow,
-        PasswordHash = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(dto.Password))
-        )
+        FullName = req.FullName,
+        Email = req.Email,
+        Phone = req.Phone ?? ""
     };
 
     db.Users.Add(user);
     await db.SaveChangesAsync();
 
-    return Results.Ok(new UserDto
-    {
-        Id = user.Id,
-        Username = user.Username,
-        Role = user.Role,
-        FullName = user.FullName,
-        Email = user.Email,
-        Phone = user.Phone,
-        CreatedAt = user.CreatedAt
-    });
-});
+    return Results.Created($"/users/{user.Id}", ToUserResponse(user));
+})
+.WithName("Register")
+.WithOpenApi();
 
-//
-// =====================
-// USERS (ADMIN)
-// =====================
-//
-app.MapGet("/users", (HttpContext ctx, AppDbContext db) =>
+// GET /users — Admin only
+app.MapGet("/users", async (AppDbContext db) =>
 {
-    if (!Role(ctx, "Admin")) return Results.Forbid();
+    var users = await db.Users.OrderBy(u => u.Id).ToListAsync();
+    return Results.Ok(users.Select(ToUserResponse));
+})
+.RequireAuthorization()
+.WithName("GetAllUsers")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
 
-    return Results.Ok(db.Users.Select(u => new UserDto
-    {
-        Id = u.Id,
-        Username = u.Username,
-        Role = u.Role,
-        FullName = u.FullName,
-        Email = u.Email,
-        Phone = u.Phone,
-        CreatedAt = u.CreatedAt
-    }).ToList());
-});
+// ════════════════════════════════════════════════════════════════════════════
+//  CAR ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════
 
-//
-// =====================
-// CARS
-// =====================
-//
-app.MapGet("/cars", (AppDbContext db) =>
+// GET /cars — any authenticated user
+app.MapGet("/cars", async (AppDbContext db) =>
 {
-    return Results.Ok(db.Cars.Select(c => new CarDto
-    {
-        Id = c.Id,
-        Make = c.Make,
-        Model = c.Model,
-        Year = c.Year,
-        Category = c.Category,
-        DailyRate = c.DailyRate,
-        LicencePlate = c.LicencePlate,
-        Colour = c.Colour,
-        Status = c.Status
-    }).ToList());
-});
+    var cars = await db.Cars.OrderBy(c => c.Id).ToListAsync();
+    return Results.Ok(cars.Select(ToCarResponse));
+})
+.RequireAuthorization()
+.WithName("GetAllCars")
+.WithOpenApi();
 
-app.MapGet("/cars/{id}", (int id, AppDbContext db) =>
+// GET /cars/{id} — any authenticated user
+app.MapGet("/cars/{id:int}", async (int id, AppDbContext db) =>
 {
-    var car = db.Cars.Find(id);
-    if (car == null) return Results.NotFound();
+    var car = await db.Cars.FindAsync(id);
+    return car is null ? Results.NotFound(new { error = "Car not found." }) : Results.Ok(ToCarResponse(car));
+})
+.RequireAuthorization()
+.WithName("GetCarById")
+.WithOpenApi();
 
-    return Results.Ok(new CarDto
-    {
-        Id = car.Id,
-        Make = car.Make,
-        Model = car.Model,
-        Year = car.Year,
-        Category = car.Category,
-        DailyRate = car.DailyRate,
-        LicencePlate = car.LicencePlate,
-        Colour = car.Colour,
-        Status = car.Status
-    });
-});
-
-app.MapPost("/cars", async (HttpContext ctx, AppDbContext db, Car car) =>
+// POST /cars — Admin only
+app.MapPost("/cars", async (CreateCarRequest req, AppDbContext db) =>
 {
-    if (!Role(ctx, "Admin")) return Results.Forbid();
+    if (string.IsNullOrWhiteSpace(req.Make) || string.IsNullOrWhiteSpace(req.Model)
+        || string.IsNullOrWhiteSpace(req.LicencePlate))
+        return Results.BadRequest(new { error = "Make, Model, and LicencePlate are required." });
 
-    car.Status = "Available";
+    if (await db.Cars.AnyAsync(c => c.LicencePlate == req.LicencePlate))
+        return Results.Conflict(new { error = "Licence plate already exists." });
+
+    var car = new Car
+    {
+        Make = req.Make, Model = req.Model, Year = req.Year,
+        Category = req.Category, DailyRate = req.DailyRate,
+        LicencePlate = req.LicencePlate, Colour = req.Colour,
+        Status = req.Status ?? "Available"
+    };
+
     db.Cars.Add(car);
     await db.SaveChangesAsync();
+    return Results.Created($"/cars/{car.Id}", ToCarResponse(car));
+})
+.RequireAuthorization()
+.WithName("CreateCar")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
 
-    return Results.Ok(car);
-});
-
-app.MapPut("/cars/{id}", async (HttpContext ctx, int id, AppDbContext db, Car dto) =>
+// PUT /cars/{id} — Admin only
+app.MapPut("/cars/{id:int}", async (int id, UpdateCarRequest req, AppDbContext db) =>
 {
-    if (!Role(ctx, "Admin")) return Results.Forbid();
-
     var car = await db.Cars.FindAsync(id);
-    if (car == null) return Results.NotFound();
+    if (car is null) return Results.NotFound(new { error = "Car not found." });
 
-    car.Make = dto.Make;
-    car.Model = dto.Model;
-    car.Year = dto.Year;
-    car.Category = dto.Category;
-    car.DailyRate = dto.DailyRate;
-    car.LicencePlate = dto.LicencePlate;
-    car.Colour = dto.Colour;
-    car.Status = dto.Status;
+    // Check licence plate uniqueness (allow same car to keep its plate)
+    if (await db.Cars.AnyAsync(c => c.LicencePlate == req.LicencePlate && c.Id != id))
+        return Results.Conflict(new { error = "Licence plate already in use by another car." });
+
+    car.Make = req.Make; car.Model = req.Model; car.Year = req.Year;
+    car.Category = req.Category; car.DailyRate = req.DailyRate;
+    car.LicencePlate = req.LicencePlate; car.Colour = req.Colour;
+    car.Status = req.Status;
 
     await db.SaveChangesAsync();
-    return Results.Ok(car);
-});
+    return Results.Ok(ToCarResponse(car));
+})
+.RequireAuthorization()
+.WithName("UpdateCar")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
 
-app.MapDelete("/cars/{id}", async (HttpContext ctx, int id, AppDbContext db) =>
+// DELETE /cars/{id} — Admin only
+app.MapDelete("/cars/{id:int}", async (int id, AppDbContext db) =>
 {
-    if (!Role(ctx, "Admin")) return Results.Forbid();
-
     var car = await db.Cars.FindAsync(id);
-    if (car == null) return Results.NotFound();
+    if (car is null) return Results.NotFound(new { error = "Car not found." });
 
     db.Cars.Remove(car);
     await db.SaveChangesAsync();
+    return Results.NoContent();
+})
+.RequireAuthorization()
+.WithName("DeleteCar")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
 
-    return Results.Ok();
-});
+// ════════════════════════════════════════════════════════════════════════════
+//  BOOKING ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════
 
-//
-// =====================
-// CREATE BOOKING
-// =====================
-//
-app.MapPost("/bookings", async (HttpContext ctx, AppDbContext db, CreateBookingDto dto) =>
+// POST /bookings — Customer only
+app.MapPost("/bookings", async (CreateBookingRequest req, ClaimsPrincipal userClaim, AppDbContext db) =>
 {
-    var user = ctx.Items["User"] as User;
-    if (user == null) return Results.Unauthorized();
+    if (GetUserRole(userClaim) != "Customer")
+        return Results.Forbid();
 
-    var car = await db.Cars.FindAsync(dto.CarId);
-    if (car == null) return Results.NotFound();
+    if (req.ReturnDate <= req.PickupDate)
+        return Results.BadRequest(new { error = "ReturnDate must be after PickupDate." });
 
-    var conflict = await db.Bookings.AnyAsync(x =>
-        x.CarId == dto.CarId &&
-        (x.Status == "Approved" || x.Status == "Active") &&
-        dto.PickupDate < x.ReturnDate &&
-        dto.ReturnDate > x.PickupDate
-    );
+    var car = await db.Cars.FindAsync(req.CarId);
+    if (car is null) return Results.NotFound(new { error = "Car not found." });
 
-    if (conflict) return Results.Conflict("Car already booked");
+    // Availability check — reject if any Active or Approved booking overlaps
+    var conflict = await db.Bookings.AnyAsync(b =>
+        b.CarId == req.CarId &&
+        (b.Status == "Approved" || b.Status == "Active") &&
+        b.PickupDate < req.ReturnDate &&
+        b.ReturnDate > req.PickupDate);
 
-    var days = (decimal)Math.Ceiling(
-        (dto.ReturnDate.Date - dto.PickupDate.Date).TotalDays
-    );
+    if (conflict)
+        return Results.Conflict(new { error = "Car is not available for the selected dates." });
 
-    if (days <= 0) return Results.BadRequest("Invalid dates");
+    var days = (int)Math.Ceiling((req.ReturnDate - req.PickupDate).TotalDays);
+    var total = car.DailyRate * days;
 
     var booking = new Booking
     {
-        CarId = dto.CarId,
-        CustomerId = user.Id,
-        PickupDate = dto.PickupDate,
-        ReturnDate = dto.ReturnDate,
-        Status = "Pending",
-        TotalAmount = days * car.DailyRate,
-        CreatedAt = DateTime.UtcNow
+        CustomerId = GetUserId(userClaim),
+        CarId = req.CarId,
+        PickupDate = req.PickupDate,
+        ReturnDate = req.ReturnDate,
+        TotalAmount = total,
+        Status = "Pending"
     };
 
     db.Bookings.Add(booking);
     await db.SaveChangesAsync();
 
-    return Results.Ok(new BookingDto
-    {
-        Id = booking.Id,
-        CarId = booking.CarId,
-        CustomerId = booking.CustomerId,
-        PickupDate = booking.PickupDate,
-        ReturnDate = booking.ReturnDate,
-        TotalAmount = booking.TotalAmount,
-        Status = booking.Status
-    });
-});
+    // Re-load with navigation properties for response
+    await db.Entry(booking).Reference(b => b.Customer).LoadAsync();
+    await db.Entry(booking).Reference(b => b.Car).LoadAsync();
 
-//
-// =====================
-// MY BOOKINGS
-// =====================
-//
-app.MapGet("/bookings/my", (HttpContext ctx, AppDbContext db) =>
+    return Results.Created($"/bookings/{booking.Id}", ToBookingResponse(booking));
+})
+.RequireAuthorization()
+.WithName("CreateBooking")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Customer"));
+
+// GET /bookings/my — Customer only (must be defined BEFORE /bookings/{id} to avoid routing conflict)
+app.MapGet("/bookings/my", async (ClaimsPrincipal userClaim, AppDbContext db) =>
 {
-    var user = ctx.Items["User"] as User;
-    if (user == null) return Results.Unauthorized();
+    var customerId = GetUserId(userClaim);
+    var bookings = await db.Bookings
+        .Include(b => b.Customer)
+        .Include(b => b.Car)
+        .Include(b => b.ApprovedBy)
+        .Where(b => b.CustomerId == customerId)
+        .OrderByDescending(b => b.CreatedAt)
+        .ToListAsync();
 
-    return Results.Ok(db.Bookings
-        .Where(b => b.CustomerId == user.Id)
-        .Select(b => new BookingDto
-        {
-            Id = b.Id,
-            CarId = b.CarId,
-            CustomerId = b.CustomerId,
-            PickupDate = b.PickupDate,
-            ReturnDate = b.ReturnDate,
-            TotalAmount = b.TotalAmount,
-            Status = b.Status
-        }).ToList());
-});
+    return Results.Ok(bookings.Select(ToBookingResponse));
+})
+.RequireAuthorization()
+.WithName("GetMyBookings")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Customer"));
 
-//
-// =====================
-// ALL BOOKINGS
-// =====================
-//
-app.MapGet("/bookings", (HttpContext ctx, AppDbContext db) =>
+// DELETE /bookings/{id} — Customer only, cancel Pending booking
+app.MapDelete("/bookings/{id:int}", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
 {
-    if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
-
-    return Results.Ok(db.Bookings.Select(b => new BookingDto
-    {
-        Id = b.Id,
-        CarId = b.CarId,
-        CustomerId = b.CustomerId,
-        PickupDate = b.PickupDate,
-        ReturnDate = b.ReturnDate,
-        TotalAmount = b.TotalAmount,
-        Status = b.Status
-    }).ToList());
-});
-
-//
-// =====================
-// CANCEL BOOKING
-// =====================
-//
-app.MapDelete("/bookings/{id}", async (HttpContext ctx, int id, AppDbContext db) =>
-{
-    var user = ctx.Items["User"] as User;
-    if (user == null) return Results.Unauthorized();
-
+    var customerId = GetUserId(userClaim);
     var booking = await db.Bookings.FindAsync(id);
-    if (booking == null) return Results.NotFound();
 
-    if (booking.CustomerId != user.Id) return Results.Forbid();
-
-    if (booking.Status != "Pending")
-        return Results.BadRequest("Only pending bookings can be cancelled");
+    if (booking is null) return Results.NotFound(new { error = "Booking not found." });
+    if (booking.CustomerId != customerId) return Results.Forbid(); // can't cancel another customer's booking
+    if (booking.Status != "Pending") return Results.BadRequest(new { error = "Only Pending bookings can be cancelled." });
 
     booking.Status = "Cancelled";
     await db.SaveChangesAsync();
+    return Results.NoContent();
+})
+.RequireAuthorization()
+.WithName("CancelBooking")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Customer"));
 
-    return Results.Ok();
-});
-
-//
-// =====================
-// APPROVE
-// =====================
-//
-app.MapPut("/bookings/{id}/approve", async (HttpContext ctx, int id, AppDbContext db) =>
+// GET /bookings — Staff or Admin
+app.MapGet("/bookings", async (AppDbContext db) =>
 {
-    if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
+    var bookings = await db.Bookings
+        .Include(b => b.Customer)
+        .Include(b => b.Car)
+        .Include(b => b.ApprovedBy)
+        .OrderByDescending(b => b.CreatedAt)
+        .ToListAsync();
 
-    var booking = await db.Bookings.FindAsync(id);
-    if (booking == null) return Results.NotFound();
+    return Results.Ok(bookings.Select(ToBookingResponse));
+})
+.RequireAuthorization()
+.WithName("GetAllBookings")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
 
-    if (booking.Status != "Pending") return Results.BadRequest();
+// PUT /bookings/{id}/approve — Staff or Admin
+app.MapPut("/bookings/{id:int}/approve", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
+{
+    var booking = await db.Bookings
+        .Include(b => b.Customer).Include(b => b.Car).Include(b => b.ApprovedBy)
+        .FirstOrDefaultAsync(b => b.Id == id);
 
-    var car = await db.Cars.FindAsync(booking.CarId);
+    if (booking is null) return Results.NotFound(new { error = "Booking not found." });
+    if (booking.Status != "Pending") return Results.BadRequest(new { error = "Only Pending bookings can be approved." });
 
     booking.Status = "Approved";
-    booking.ApprovedById = (ctx.Items["User"] as User)!.Id;
-    if (car != null) car.Status = "Rented";
-
+    booking.ApprovedById = GetUserId(userClaim);
     await db.SaveChangesAsync();
-    return Results.Ok();
-});
 
-//
-// =====================
-// REJECT
-// =====================
-//
-app.MapPut("/bookings/{id}/reject", async (HttpContext ctx, int id, AppDbContext db) =>
+    await db.Entry(booking).Reference(b => b.ApprovedBy).LoadAsync();
+    return Results.Ok(ToBookingResponse(booking));
+})
+.RequireAuthorization()
+.WithName("ApproveBooking")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+
+// PUT /bookings/{id}/reject — Staff or Admin
+app.MapPut("/bookings/{id:int}/reject", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
 {
-    if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
+    var booking = await db.Bookings
+        .Include(b => b.Customer).Include(b => b.Car).Include(b => b.ApprovedBy)
+        .FirstOrDefaultAsync(b => b.Id == id);
 
-    var booking = await db.Bookings.FindAsync(id);
-    if (booking == null) return Results.NotFound();
-
-    if (booking.Status != "Pending") return Results.BadRequest();
+    if (booking is null) return Results.NotFound(new { error = "Booking not found." });
+    if (booking.Status != "Pending") return Results.BadRequest(new { error = "Only Pending bookings can be rejected." });
 
     booking.Status = "Rejected";
-    booking.ApprovedById = (ctx.Items["User"] as User)!.Id;
-
+    booking.ApprovedById = GetUserId(userClaim);
     await db.SaveChangesAsync();
-    return Results.Ok();
-});
 
-//
-// =====================
-// COMPLETE
-// =====================
-//
-app.MapPut("/bookings/{id}/complete", async (HttpContext ctx, int id, AppDbContext db) =>
+    await db.Entry(booking).Reference(b => b.ApprovedBy).LoadAsync();
+    return Results.Ok(ToBookingResponse(booking));
+})
+.RequireAuthorization()
+.WithName("RejectBooking")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+
+// PUT /bookings/{id}/complete — Staff or Admin
+app.MapPut("/bookings/{id:int}/complete", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
 {
-    if (!Role(ctx, "Staff", "Admin")) return Results.Forbid();
+    var booking = await db.Bookings
+        .Include(b => b.Customer).Include(b => b.Car).Include(b => b.ApprovedBy)
+        .FirstOrDefaultAsync(b => b.Id == id);
 
-    var booking = await db.Bookings.FindAsync(id);
-    if (booking == null) return Results.NotFound();
-
-    if (booking.Status != "Active") return Results.BadRequest();
-
-    var car = await db.Cars.FindAsync(booking.CarId);
+    if (booking is null) return Results.NotFound(new { error = "Booking not found." });
+    if (booking.Status != "Active") return Results.BadRequest(new { error = "Only Active bookings can be marked as completed." });
 
     booking.Status = "Completed";
-    if (car != null) car.Status = "Available";
-
+    if (booking.Car != null) booking.Car.Status = "Available";
     await db.SaveChangesAsync();
-    return Results.Ok();
-});
+
+    return Results.Ok(ToBookingResponse(booking));
+})
+.RequireAuthorization()
+.WithName("CompleteBooking")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+
+// ── Also handle Approved → Active transition ─────────────────────────────────
+// Staff can manually mark an Approved booking as Active (pickup date reached)
+app.MapPut("/bookings/{id:int}/activate", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
+{
+    var booking = await db.Bookings
+        .Include(b => b.Customer).Include(b => b.Car).Include(b => b.ApprovedBy)
+        .FirstOrDefaultAsync(b => b.Id == id);
+
+    if (booking is null) return Results.NotFound(new { error = "Booking not found." });
+    if (booking.Status != "Approved") return Results.BadRequest(new { error = "Only Approved bookings can be activated." });
+
+    booking.Status = "Active";
+    if (booking.Car != null) booking.Car.Status = "Rented";
+    await db.SaveChangesAsync();
+
+    return Results.Ok(ToBookingResponse(booking));
+})
+.RequireAuthorization()
+.WithName("ActivateBooking")
+.WithOpenApi()
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+
+app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();
