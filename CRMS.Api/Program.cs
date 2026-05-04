@@ -153,7 +153,7 @@ app.MapGet("/users", async (AppDbContext db) =>
 .RequireAuthorization()
 .WithName("GetAllUsers")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Admin" });
 
 // ════════════════════════════════════════════════════════════════════════════
 //  CAR ENDPOINTS
@@ -204,7 +204,7 @@ app.MapPost("/cars", async (CreateCarRequest req, AppDbContext db) =>
 .RequireAuthorization()
 .WithName("CreateCar")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Admin" });
 
 // PUT /cars/{id} — Admin only
 app.MapPut("/cars/{id:int}", async (int id, UpdateCarRequest req, AppDbContext db) =>
@@ -227,7 +227,7 @@ app.MapPut("/cars/{id:int}", async (int id, UpdateCarRequest req, AppDbContext d
 .RequireAuthorization()
 .WithName("UpdateCar")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Admin" });
 
 // DELETE /cars/{id} — Admin only
 app.MapDelete("/cars/{id:int}", async (int id, AppDbContext db) =>
@@ -242,7 +242,7 @@ app.MapDelete("/cars/{id:int}", async (int id, AppDbContext db) =>
 .RequireAuthorization()
 .WithName("DeleteCar")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Admin" });
 
 // ════════════════════════════════════════════════════════════════════════════
 //  BOOKING ENDPOINTS
@@ -295,7 +295,7 @@ app.MapPost("/bookings", async (CreateBookingRequest req, ClaimsPrincipal userCl
 .RequireAuthorization()
 .WithName("CreateBooking")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Customer"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Customer" });
 
 // GET /bookings/my — Customer only (must be defined BEFORE /bookings/{id} to avoid routing conflict)
 app.MapGet("/bookings/my", async (ClaimsPrincipal userClaim, AppDbContext db) =>
@@ -314,7 +314,7 @@ app.MapGet("/bookings/my", async (ClaimsPrincipal userClaim, AppDbContext db) =>
 .RequireAuthorization()
 .WithName("GetMyBookings")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Customer"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Customer" });
 
 // DELETE /bookings/{id} — Customer only, cancel Pending booking
 app.MapDelete("/bookings/{id:int}", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
@@ -333,7 +333,7 @@ app.MapDelete("/bookings/{id:int}", async (int id, ClaimsPrincipal userClaim, Ap
 .RequireAuthorization()
 .WithName("CancelBooking")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Customer"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Customer" });
 
 // GET /bookings — Staff or Admin
 app.MapGet("/bookings", async (AppDbContext db) =>
@@ -350,7 +350,7 @@ app.MapGet("/bookings", async (AppDbContext db) =>
 .RequireAuthorization()
 .WithName("GetAllBookings")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Staff,Admin" });
 
 // PUT /bookings/{id}/approve — Staff or Admin
 app.MapPut("/bookings/{id:int}/approve", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
@@ -372,7 +372,7 @@ app.MapPut("/bookings/{id:int}/approve", async (int id, ClaimsPrincipal userClai
 .RequireAuthorization()
 .WithName("ApproveBooking")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Staff,Admin" });
 
 // PUT /bookings/{id}/reject — Staff or Admin
 app.MapPut("/bookings/{id:int}/reject", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
@@ -394,7 +394,7 @@ app.MapPut("/bookings/{id:int}/reject", async (int id, ClaimsPrincipal userClaim
 .RequireAuthorization()
 .WithName("RejectBooking")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Staff,Admin" });
 
 // PUT /bookings/{id}/complete — Staff or Admin
 app.MapPut("/bookings/{id:int}/complete", async (int id, ClaimsPrincipal userClaim, AppDbContext db) =>
@@ -415,7 +415,7 @@ app.MapPut("/bookings/{id:int}/complete", async (int id, ClaimsPrincipal userCla
 .RequireAuthorization()
 .WithName("CompleteBooking")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Staff,Admin" });
 
 // ── Also handle Approved → Active transition ─────────────────────────────────
 // Staff can manually mark an Approved booking as Active (pickup date reached)
@@ -437,7 +437,7 @@ app.MapPut("/bookings/{id:int}/activate", async (int id, ClaimsPrincipal userCla
 .RequireAuthorization()
 .WithName("ActivateBooking")
 .WithOpenApi()
-.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute(Roles: "Staff,Admin"));
+.WithMetadata(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = "Staff,Admin" });
 
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
